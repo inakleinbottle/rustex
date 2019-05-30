@@ -1,0 +1,10 @@
+[package]
+name = "rustex"
+version = "0.1.0"
+authors = ["inakleinbottle <41870650+inakleinbottle@users.noreply.github.com>"]
+edition = "2018"
+
+[dependencies]
+structopt = "0.2.16"
+outparse = { path = "src/outparse" }
+
