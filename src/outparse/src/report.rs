@@ -1,7 +1,5 @@
-use std::collections::HashMap;
 use serde::Serialize;
-
-
+use std::collections::HashMap;
 
 #[derive(Debug, Serialize)]
 pub struct MessageInfo {
@@ -11,10 +9,9 @@ pub struct MessageInfo {
 }
 
 impl MessageInfo {
-
     fn get_component_name<'a>(&'a self) -> Option<&'a str> {
         if self.details.contains_key("component") {
-            Some(&self.details.get("component").unwrap()) 
+            Some(&self.details.get("component").unwrap())
         } else if self.details.contains_key("package") {
             Some(&self.details.get("package").unwrap())
         } else if self.details.contains_key("class") {
@@ -32,10 +29,8 @@ impl MessageInfo {
         if let Some(current) = self.details.get_mut("message") {
             current.push_str(message);
         } else {
-            self.details.insert(
-                String::from("message"),
-                message.to_owned()
-            );
+            self.details
+                .insert(String::from("message"), message.to_owned());
         }
     }
 }
@@ -49,14 +44,13 @@ pub enum Message {
 }
 
 impl Message {
-    
     pub(crate) fn get_component_name<'a>(&'a self) -> Option<&'a str> {
         use Message::*;
         match self {
             Error(ref inner) => inner.get_component_name(),
             Warning(ref inner) => inner.get_component_name(),
             Info(ref inner) => inner.get_component_name(),
-            Badbox(_) => None
+            Badbox(_) => None,
         }
     }
 
@@ -66,7 +60,7 @@ impl Message {
             Error(ref mut inner) => inner.extend_message(message),
             Warning(ref mut inner) => inner.extend_message(message),
             Info(ref mut inner) => inner.extend_message(message),
-            Badbox(_) => return
+            Badbox(_) => return,
         }
     }
 
@@ -75,13 +69,11 @@ impl Message {
         match self {
             Error(ref mut inner) => inner.add_context(line),
             Warning(ref mut inner) => inner.add_context(line),
-            Info(ref mut  inner) => inner.add_context(line),
-            Badbox(ref mut inner) => inner.add_context(line)
+            Info(ref mut inner) => inner.add_context(line),
+            Badbox(ref mut inner) => inner.add_context(line),
         }
     }
 }
-
-
 
 #[derive(Debug, Serialize)]
 pub struct BuildReport {
@@ -93,17 +85,13 @@ pub struct BuildReport {
 }
 
 impl BuildReport {
-
     pub(crate) fn new() -> BuildReport {
         BuildReport {
             messages: Vec::new(),
             errors: 0,
             warnings: 0,
             badboxes: 0,
-            info: 0
+            info: 0,
         }
     }
-
-
-
 }
