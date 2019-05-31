@@ -1,14 +1,8 @@
-use std::collections::HashMap;
-use std::error::Error;
-use std::fmt;
-use std::io::prelude::*;
-use std::io::{self, BufReader};
-
-use lazy_static::lazy_static;
-use regex::{Captures, Regex};
-use serde::Serialize;
+use lazy_static;
+use serde;
 
 pub mod report;
 pub use report::*;
-
+pub mod parser;
+pub use parser::*;
 
