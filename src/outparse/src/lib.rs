@@ -37,36 +37,50 @@ lazy_static! {
 
 
 
-struct LogParser<'a, B: BufRead> {
+struct LogParser<'a, B: 'a + BufRead> {
     report: &'a mut BuildReport,
     reader: B,
-    last_message: Option<&'a mut Message>,
     lineno: usize,
-    collect_remaining: Option<usize>,
+    collect_remaining: usize,
     context_lines: usize
 }
 
 
-impl<'a, B: BufRead> LogParser<'a, B> {
+impl<'a, B: 'a + BufRead> LogParser<'a, B> {
 
 
     fn next_line(&mut self) -> Option<String> {
         let mut line = String::new();
         match self.reader.read_line(&mut line) {
-            Ok(_) => Some(line),
+            Ok(_) => {
+                self.lineno += 1;
+                Some(line)
+            },
             Err(_) => None
         }
+    }
+
+    fn last_message(&'a mut self) -> Option<&'a mut Message> {
+        self.report.messages.last_mut()
+    }
+
+    fn after_match(&mut self) {
+        self.collect_remaining = self.context_lines;
     }
 
     fn parse_line(&mut self, line: &str) {
         if let Some(m) = INFO.captures(&line) {
             self.process_info(m);
+            self.after_match();
         } else if let Some(m) = BADBOX.captures(&line) {
             self.process_badbox(m);
+            self.after_match();
         } else if let Some(m) = WARNING.captures(&line) {
             self.process_warning(m);
+            self.after_match();
         } else if let Some(m) = ERROR.captures(&line) {
             self.process_error(m);
+            self.after_match();
         }
     }
 
@@ -214,46 +228,41 @@ impl<'a, B: BufRead> LogParser<'a, B> {
 }
 
 
-impl<'a, B: BufRead> LogParser<'a, B> {
+impl<'a, B: 'a + BufRead> LogParser<'a, B> {
 
     pub fn new(report: &'a mut BuildReport, reader: B, context_lines: usize) -> LogParser<'a, B> {
         LogParser {
             report,
             reader,
-            last_message: None,
             lineno: 0,
-            collect_remaining: None,
+            collect_remaining: 0,
             context_lines,
         }
     }
 
-    pub fn parse(&mut self) {
+    pub fn parse(mut self) {
         loop {
             let line = match self.next_line() {
                 Some(l) => l,
                 None => continue
             };
 
-            if let Some(ref mut last) = self.last_message {
+            if let Some(last) = self.last_message() {
                 if let Some(cmpt) = last.get_component_name() {
                     let pattern = format!("({}) ", cmpt);
                     if line.starts_with(&pattern) {
                         let message = line.trim_start_matches(&pattern).trim_start();
                         last.extend_message(&message);
+                        self.collect_remaining = 0;
                         continue
                     }
                 } 
-            }
 
-            if let Some(ref mut i) = self.collect_remaining {
-                *i -= 1;
-                if let Some(ref mut last) = self.last_message {
+                if self.collect_remaining > 0 {
                     last.add_context(line);
+                    self.collect_remaining -= 1;
+                    continue
                 }
-                if *i == 0 {
-                    self.collect_remaining = None;
-                }
-                continue
             }
 
             self.parse_line(&line);
@@ -264,13 +273,14 @@ impl<'a, B: BufRead> LogParser<'a, B> {
 }
 
 pub fn parse_log<R: Read>(log: R) -> BuildReport {
-    let mut reader = BufReader::new(log);
+    let reader = BufReader::new(log);
     let mut report = BuildReport::new();
 
     let mut parser: LogParser<BufReader<R>> = LogParser::new(
         &mut report, reader, 2
     );
 
+    parser.parse();
 
     report
 }
