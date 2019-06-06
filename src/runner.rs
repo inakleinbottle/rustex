@@ -2,32 +2,137 @@ use std::collections::VecDeque;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Child as ChildProcess, Stdio};
-use serde::{Serialize, Deserialize}
+use serde::{Serialize, Deserialize};
 
 use failure::{Error as E, err_msg};
+use structopt::{StructOpt};
 
 use outparse::{parse_log, BuildReport};
+use crate::engine::get_extension_for_engine;
+use crate::report::RunnerReport;
+use crate::jobs::{Job, JobStatus};
+use crate::config::Config;
 
+
+#[derive(Debug)]
 pub enum ReportFormat {
     Human,
     Json,
 }
 
+pub struct Runner<'cfg> {
+    config: &'cfg Config,
 
-#[derive(Debug, Serialize, Deserialize)]
+    active: VecDeque<Job>,
+    completed: Vec<Job>
+
+}
+
+impl<'cfg> Runner<'cfg> {
+
+    pub fn new(config: &'cfg Config) -> Runner {
+        Runner {
+            config,
+            active: VecDeque::new(),
+            completed: Vec::new(),
+        }
+    }
+
+    fn submit(&mut self, path: &Path) -> Result<(), E> {
+        let job = Job::new(&self.config, path)?;
+        self.active.push_back(job);
+        Ok(())
+    }
+    
+    fn process_submissions(&mut self) -> Result<RunnerReport, E> {
+        while let Some(mut job) = self.active.pop_front() {
+            if job.poll() {
+                self.completed.push(job); 
+            } else {
+                self.active.push_back(job);
+            }
+        }
+        self.do_cleanup()?;
+
+        self.build_report()
+    }
+
+    fn do_cleanup(&mut self) -> Result<(), E> {
+        for job in self.completed.iter_mut() {
+            job.cleanup()?;
+        }
+        Ok(())
+    } 
+
+    fn build_report(&self) -> Result<RunnerReport, E> {
+        use JobStatus::*;
+        let mut report = RunnerReport::new();
+        report.num_files = self.completed.len();
+        for job in &self.completed {
+            let jobname = job.jobname.clone();
+            match &job.status {
+                Success => report.success += 1,
+                Failure => report.fail += 1,
+                _ => return Err(err_msg("Job was not completed."))
+            }
+        }
+        Ok(report)
+    }
+
+    pub fn run(&mut self) -> Result<RunnerReport, E> {
+        for p in self.config.paths() {
+            self.submit(&p)?
+        }
+
+        self.process_submissions()
+    }
+
+
+}
+
+/*
+
+#[derive(Debug)]
 struct LatexRunner {
     engine: String,
     flags: Vec<String>,
-    output_dir: Option<PathBuf>
+    output_dir: Option<PathBuf>,
 
-    max_rebuilds: usize,
+    max_rebuilds: u8,
     force_two_runs: bool,
 
     clean_build: bool,
     report_fmt: ReportFormat,
 
-    running_processes: VecDeque<(Command, ChildProcess, u8)>,
-    build_reports: Vec<BuildReport>
+    active_jobs: VecDeque<Job>,
+    completed_jobs: Vec<Job>,
+}
+
+impl From<&LatexRunnerConfig> for LatexRunner {
+
+    fn from(config: &LatexRunnerConfig) -> LatexRunner {
+        let outdir = match &config.build_directory {
+            Some(ostr) => Some(PathBuf::from(ostr)),
+            None => None,
+        };
+
+        LatexRunner{
+            engine: config.engine.clone(),
+            flags: config.flags.clone(),
+            output_dir: outdir,
+
+            max_rebuilds: config.max_rebuilds,
+            force_two_runs: config.force_two_builds,
+
+            clean_build: config.clean_build,
+
+            report_fmt: ReportFormat::Human,
+
+            active_jobs: VecDeque::new(),
+            completed_jobs: Vec::new(),
+        }
+    }
+
 }
 
 
@@ -37,89 +142,96 @@ impl Default for LatexRunner {
         LatexRunner {
             engine: String::from("pdflatex"),
             flags: vec![String::from("-interaction=nonstopmode")],
-            output_dir: None;
-            max_rebuilds: 2,
+            output_dir: None,
+            max_rebuilds: 1,
             force_two_runs: false,
             clean_build: false,
             report_fmt: ReportFormat::Human,
-            running_processes: VecDeque::new(),
-            build_reports: Vec::new(),
+            active_jobs: VecDeque::new(),
+            completed_jobs: Vec::new(),
         }
     }
+
 }
 
-struct BuildError(BuildReport);
 
-impl BuildError {
-    fn report(self) -> BuildReport {
-        self.0
-    }
-}
 
 impl LatexRunner {
 
-    fn new_command(&self, path: &Path) -> Command {
-        let mut cmd = Command::new(self.engine);
-        &self.flags.for_each(|f| cmd.arg(f));
-        if let Some(p) = self.output_dir {
-            let flag = OsString.from("-output-directory=");
-            flag.push(p.as_os_str());
-            cmd.arg(&flag);
-        }
-        cmd.arg(&path);
-        cmd.stdout(Stdio::piped())
-        cmd.stderr(Stdio::inherit())
-        cmd
-    }
-
-    fn submit(&mut self, path: &Path) -> Result<(), E> {
-        let cmd = self.new_command(&path);
-        let child = cmd.spawn()?;
-        self.running_processes.push_back((Command, child, 1));
+    
+    fn clean_build_dir(&self) -> Result<(), E> {
+        let dir = match &self.output_dir {
+            Some(p) => p.to_owned(),
+            None    => PathBuf::from(".")
+        };
+        let ext = get_extension_for_engine(&self.engine);
+        
+        
         Ok(())
     }
 
-    fn check_child(&mut self, child: &ChildProcess, repeats: &u8)
-            -> Result<Option<(bool, BuildReport)>, BuildError> {
-        if let Some(result) = child.try_wait()? {
-
-            let stdout = child.stdout.unwrap();
-            let report = parse_log(stdout);
-
-            if report.errors > 0 {
-                Err(BuildError(report))
-            } else if report.warnings > 0 && *repeats < self.max_rebuilds {
-                Ok(Some(true, report))
-            } else if *repeats == 1 && self.force_two_runs {
-                Ok(Some(true, report))
-            } else {
-                Ok(Some(false, report))
-            }
-
+    fn do_cleanup(&mut self) -> Result<(), E> {
+        if self.clean_build {
+            self.clean_build_dir()
         } else {
-            Ok(None)
+            Ok(())
         }
     } 
 
-    fn process_submissions(&mut self) -> Result<(), E> {
-        while !self.running_processes.isempty() {
-            let (cmd, child, repeats) = self.running_processes.pop_front();
-            match self.check_child(&child, &repeats) {
-                Ok(Some((true, _)) => {
-                    let new_child = cmd.spawn()?;
-                    self.running_processes.push_back(
-                        (cmd, new_child, repeats + 1)
-                    );
-                },
-                Ok(Some((false, report)) => self.build_reports.push(report),
-                Ok(None) => self.running_processes.push_back(
-                                (cmd, child, repeats)
-                            );
-                Err(build_error) => {
-                    println!("An error occured {}", build_error.report());
-                }
+    fn build_report(&self) -> Result<RunnerReport, E> {
+        use JobStatus::*;
+        let mut report = RunnerReport::new();
+        report.num_files = self.completed_jobs.len();
+        for job in &self.completed_jobs {
+            let jobname = job.jobname.clone();
+            match &job.status {
+                Success => report.success += 1,
+                Failure => report.fail += 1,
+                _ => return Err(err_msg("Job was not completed."))
             }
         }
-        Ok(())
+        Ok(report)
     }
+}
+
+*/ 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_config() -> Config {
+        Config::default()
+    }
+
+    #[test]
+    fn test_build_with_pdflatex() {
+        let config = make_config();
+        let path = PathBuf::from("test.tex");
+        let mut runner = Runner::new(&config);
+        runner.submit(&path).expect(
+            "An error occured whilst submitting task"
+        );
+
+        assert_eq!(runner.active.len(), 1);
+
+        runner.process_submissions().expect(
+            "An error occured whilst processing task"
+        );
+
+        assert_eq!(runner.active.len(), 0);
+        assert_eq!(runner.completed.len(), 1);
+
+        let job = runner.completed.get(0).unwrap();
+        let report = job.report.as_ref().unwrap();
+        assert_eq!(report.errors, 0);
+        assert_eq!(report.warnings, 0);
+        assert_eq!(report.badboxes, 0);
+
+    }
+
+
+
+
+
 }

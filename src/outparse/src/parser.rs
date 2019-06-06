@@ -42,10 +42,11 @@ impl<'a, B: 'a + BufRead> LogParser<'a, B> {
     fn next_line(&mut self) -> Option<String> {
         let mut line = String::new();
         match self.reader.read_line(&mut line) {
-            Ok(_) => {
+            Ok(read) if read > 0 => {
                 self.lineno += 1;
                 Some(line)
             }
+            Ok(_) => None,
             Err(_) => None,
         }
     }
@@ -201,11 +202,7 @@ impl<'a, B: 'a + BufRead> LogParser<'a, B> {
     }
 
     pub fn parse(mut self) {
-        loop {
-            let line = match self.next_line() {
-                Some(l) => l,
-                None => continue,
-            };
+        while let Some(line) = self.next_line() {
 
             if let Some(last) = self.report.messages.last_mut() {
                 if let Some(cmpt) = last.get_component_name() {
@@ -234,7 +231,7 @@ pub fn parse_log<R: Read>(log: R) -> BuildReport {
     let reader = BufReader::new(log);
     let mut report = BuildReport::new();
 
-    let mut parser: LogParser<BufReader<R>> = LogParser::new(&mut report, reader, 2);
+    let parser: LogParser<BufReader<R>> = LogParser::new(&mut report, reader, 2);
 
     parser.parse();
 
