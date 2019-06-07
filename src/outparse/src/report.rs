@@ -1,5 +1,6 @@
 use serde::Serialize;
 use std::collections::HashMap;
+use std::fmt;
 
 #[derive(Debug, Serialize)]
 pub struct MessageInfo {
@@ -93,5 +94,18 @@ impl BuildReport {
             badboxes: 0,
             info: 0,
         }
+    }
+}
+
+impl fmt::Display for BuildReport {
+
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "Errors: {}, Warnings: {}, Badboxes: {}",
+            self.errors,
+            self.warnings,
+            self.badboxes,
+        )
     }
 }

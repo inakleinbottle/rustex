@@ -6,8 +6,10 @@ use serde::{Serialize, Deserialize};
 
 use failure::{Error as E, err_msg};
 use structopt::{StructOpt};
+use indicatif::ProgressBar;
 
 use outparse::{parse_log, BuildReport};
+
 use crate::engine::get_extension_for_engine;
 use crate::report::RunnerReport;
 use crate::jobs::{Job, JobStatus};
@@ -24,7 +26,7 @@ pub struct Runner<'cfg> {
     config: &'cfg Config,
 
     active: VecDeque<Job>,
-    completed: Vec<Job>
+    completed: Vec<Job>,
 
 }
 
@@ -45,13 +47,23 @@ impl<'cfg> Runner<'cfg> {
     }
     
     fn process_submissions(&mut self) -> Result<RunnerReport, E> {
+        let pb = ProgressBar::new(self.active.len() as u64);
         while let Some(mut job) = self.active.pop_front() {
             if job.poll() {
+                pb.inc(1);
+                pb.println(format!(
+                    "Completed build {}: {}", 
+                    job.jobname.to_string_lossy(),
+                    job.report.as_ref().unwrap()
+                    )
+                );
                 self.completed.push(job); 
             } else {
                 self.active.push_back(job);
             }
         }
+
+        pb.finish();
         self.do_cleanup()?;
 
         self.build_report()
