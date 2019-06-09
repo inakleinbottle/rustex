@@ -10,7 +10,7 @@ pub struct MessageInfo {
 }
 
 impl MessageInfo {
-    fn get_component_name<'a>(&'a self) -> Option<&'a str> {
+    fn get_component_name(&self) -> Option<&String> {
         if self.details.contains_key("component") {
             Some(&self.details.get("component").unwrap())
         } else if self.details.contains_key("package") {
@@ -42,36 +42,61 @@ pub enum Message {
     Warning(MessageInfo),
     Badbox(MessageInfo),
     Info(MessageInfo),
+    MissingCitation { label: String },
+    MissingReference { label: String },
 }
 
+use Message::*;
+
 impl Message {
-    pub(crate) fn get_component_name<'a>(&'a self) -> Option<&'a str> {
-        use Message::*;
+    pub(crate) fn get_component_name(&self) -> Option<&String> {
         match self {
-            Error(ref inner) => inner.get_component_name(),
-            Warning(ref inner) => inner.get_component_name(),
-            Info(ref inner) => inner.get_component_name(),
-            Badbox(_) => None,
+            Error(ref inner) | Warning(ref inner) | Info(ref inner) => {
+                inner.get_component_name()
+            },
+            _ => None,
         }
     }
 
     pub(crate) fn extend_message(&mut self, message: &str) {
-        use Message::*;
-        match self {
-            Error(ref mut inner) => inner.extend_message(message),
-            Warning(ref mut inner) => inner.extend_message(message),
-            Info(ref mut inner) => inner.extend_message(message),
-            Badbox(_) => return,
-        }
+        self.as_mut().unwrap().extend_message(message);
     }
 
     pub(crate) fn add_context(&mut self, line: String) {
+        if let Some(inner) = self.as_mut() {
+            inner.add_context(line);
+        }
+    }
+
+    pub fn as_ref(&self) -> Option<&MessageInfo> {
+        match self {
+            Error(ref inner) => Some(inner),
+            Warning(ref inner) => Some(inner),
+            Badbox(ref inner) => Some(inner),
+            Info(ref inner) => Some(inner),
+            _ => None
+        }
+    }
+
+    pub fn as_mut(&mut self) -> Option<&mut MessageInfo> {
+        match self {
+            Error(ref mut inner) => Some(inner),
+            Warning(ref mut inner) => Some(inner),
+            Badbox(ref mut inner) => Some(inner),
+            Info(ref mut inner) => Some(inner),
+            _ => None
+        }
+    }
+
+    pub fn to_str(&self) -> String {
         use Message::*;
         match self {
-            Error(ref mut inner) => inner.add_context(line),
-            Warning(ref mut inner) => inner.add_context(line),
-            Info(ref mut inner) => inner.add_context(line),
-            Badbox(ref mut inner) => inner.add_context(line),
+            Error(ref inner) => inner.full.clone(),
+            Warning(ref inner) => inner.full.clone(),
+            Info(ref inner) => inner.full.clone(),
+            Badbox(ref inner) => inner.full.clone(),
+            MissingCitation { label } => format!("Missing citation: {}", &label),
+            MissingReference { label } => format!("Missing reference: {}", &label),
         }
     }
 }
@@ -82,6 +107,8 @@ pub struct BuildReport {
     pub warnings: usize,
     pub badboxes: usize,
     pub info: usize,
+    pub missing_references: usize,
+    pub missing_citations: usize,
     pub messages: Vec<Message>,
 }
 
@@ -93,6 +120,8 @@ impl BuildReport {
             warnings: 0,
             badboxes: 0,
             info: 0,
+            missing_citations: 0,
+            missing_references: 0,
         }
     }
 }
@@ -108,4 +137,5 @@ impl fmt::Display for BuildReport {
             self.badboxes,
         )
     }
+
 }

@@ -1,11 +1,13 @@
+use std::ffi::OsString;
+use std::fmt;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Child as ChildProcess, ChildStdout, Command};
+use std::rc::Rc;
 
-use std::ffi::{OsString};
-use std::path::{Path};
-use std::process::{Command, Child as ChildProcess, ChildStdout};
+use failure::{err_msg, Error};
 
-use failure::{Error, err_msg};
-
-use outparse::{BuildReport, parse_log};
+use outparse::{parse_log, BuildReport};
 
 use crate::config::Config;
 
@@ -17,8 +19,21 @@ pub enum JobStatus {
     NeedsRebuild,
 }
 
+impl fmt::Display for JobStatus {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use JobStatus::*;
+        match self {
+            Pending => write!(f, "pending"),
+            Success => write!(f, "succeeded"),
+            Failed => write!(f, "failed"),
+            NeedsRebuild => write!(f, "needs rebuilding"),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Job {
+    config: Rc<Config>,
     pub jobname: OsString,
     command: Command,
     child: Option<ChildProcess>,
@@ -27,15 +42,25 @@ pub struct Job {
     pub status: JobStatus,
 }
 
-impl Job {
+impl fmt::Display for Job {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{} {}", self.jobname.to_string_lossy(), self.status)?;
+        if let Some(ref report) = self.report {
+            write!(f, ": {}", report)?;
+        }
+        Ok(())
+    }
+}
 
-    pub fn new(config: &Config, path: &Path) -> Result<Job, Error> {
+impl Job {
+    pub fn new(config: Rc<Config>, path: &Path) -> Result<Job, Error> {
         let mut command = config.get_command();
         command.arg(&path);
         let mut job = Job {
-            jobname: path.file_name().unwrap().to_owned(),
+            config,
+            jobname: path.file_stem().unwrap().to_owned(),
             command,
-            child: None, 
+            child: None,
             run_count: 0,
             report: None,
             status: JobStatus::Pending,
@@ -60,7 +85,7 @@ impl Job {
         if report.errors > 0 || !exit_code_success {
             self.status = JobStatus::Failed;
             true
-        } else if report.warnings > 0 && self.run_count == 1 {
+        } else if report.missing_references > 0 && self.run_count == 1 {
             self.spawn().expect("Could not spawn process");
             false
         } else {
@@ -72,16 +97,15 @@ impl Job {
     pub fn poll(&mut self) -> bool {
         let child = match self.child {
             Some(ref mut c) => c,
-            None => return false
+            None => return false,
         };
         match child.try_wait() {
             Ok(Some(r)) => self.check_build_log(r.success()),
-            Ok(None)    => false,
-            Err(e)      => {
+            Ok(None) => false,
+            Err(e) => {
                 self.status = JobStatus::Failed;
                 true
             }
-
         }
     }
 
@@ -100,9 +124,23 @@ impl Job {
     }
 
     pub fn cleanup(&mut self) -> Result<(), Error> {
+        let dir = match &self.config.build_directory {
+            Some(d) => PathBuf::from(d),
+            None => PathBuf::from("."),
+        };
+        let name = self.jobname.to_string_lossy();
+        for f in dir.read_dir()?.map(|f| f.unwrap().path()) {
+            if let Some(fname) = f.file_name() {
+                if fname.to_string_lossy().starts_with(name.as_ref()) {
+                    let ext = f.extension().unwrap();
+                    if ext == "tex" || ext == "pdf" {
+                        continue;
+                    }
+                    fs::remove_file(f)?;
+                }
+            }
+        }
 
         Ok(())
     }
-
 }
-

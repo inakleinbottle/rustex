@@ -1,20 +1,32 @@
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Child as ChildProcess, Stdio};
-use serde::{Serialize, Deserialize};
+use std::process::{Child as ChildProcess, Command, Stdio};
+use std::rc::Rc;
 
-use failure::{Error as E, err_msg};
-use structopt::{StructOpt};
+use failure::{err_msg, Error as E};
 use indicatif::ProgressBar;
+use structopt::StructOpt;
 
 use outparse::{parse_log, BuildReport};
 
-use crate::engine::get_extension_for_engine;
-use crate::report::RunnerReport;
-use crate::jobs::{Job, JobStatus};
 use crate::config::Config;
+use crate::engine::get_extension_for_engine;
+use crate::jobs::{Job, JobStatus};
+use crate::report::RunnerReport;
 
+pub trait ReportIF {
+    fn finish(&self, report: &RunnerReport);
+    fn report_completed(&self, job: &Job);
+}
+
+pub struct NoReporter;
+
+impl ReportIF for NoReporter {
+    fn finish(&self, report: &RunnerReport) {}
+    fn report_completed(&self, job: &Job) {}
+}
 
 #[derive(Debug)]
 pub enum ReportFormat {
@@ -22,59 +34,55 @@ pub enum ReportFormat {
     Json,
 }
 
-pub struct Runner<'cfg> {
-    config: &'cfg Config,
+pub struct Runner {
+    config: Rc<Config>,
+    reporter: Box<dyn ReportIF>,
 
     active: VecDeque<Job>,
     completed: Vec<Job>,
-
 }
 
-impl<'cfg> Runner<'cfg> {
-
-    pub fn new(config: &'cfg Config) -> Runner {
+impl Runner {
+    pub fn new(config: Rc<Config>, reporter: Box<dyn ReportIF>) -> Runner {
         Runner {
             config,
+            reporter,
             active: VecDeque::new(),
             completed: Vec::new(),
         }
     }
 
     fn submit(&mut self, path: &Path) -> Result<(), E> {
-        let job = Job::new(&self.config, path)?;
+        let job = Job::new(self.config.clone(), path)?;
         self.active.push_back(job);
         Ok(())
     }
-    
+
     fn process_submissions(&mut self) -> Result<RunnerReport, E> {
-        let pb = ProgressBar::new(self.active.len() as u64);
         while let Some(mut job) = self.active.pop_front() {
             if job.poll() {
-                pb.inc(1);
-                pb.println(format!(
-                    "Completed build {}: {}", 
-                    job.jobname.to_string_lossy(),
-                    job.report.as_ref().unwrap()
-                    )
-                );
-                self.completed.push(job); 
+                self.reporter.report_completed(&job);
+                self.completed.push(job);
             } else {
                 self.active.push_back(job);
             }
         }
-
-        pb.finish();
         self.do_cleanup()?;
 
-        self.build_report()
+        let report = self.build_report()?;
+        self.reporter.finish(&report);
+        Ok(report)
     }
 
     fn do_cleanup(&mut self) -> Result<(), E> {
+        if !self.config.clean_build {
+            return Ok(());
+        }
         for job in self.completed.iter_mut() {
             job.cleanup()?;
         }
         Ok(())
-    } 
+    }
 
     fn build_report(&self) -> Result<RunnerReport, E> {
         use JobStatus::*;
@@ -84,22 +92,20 @@ impl<'cfg> Runner<'cfg> {
             let jobname = job.jobname.clone();
             match &job.status {
                 Success => report.success += 1,
-                Failure => report.fail += 1,
-                _ => return Err(err_msg("Job was not completed."))
+                Failed => report.fail += 1,
+                _ => return Err(err_msg("Job was not completed.")),
             }
         }
         Ok(report)
     }
 
-    pub fn run(&mut self) -> Result<RunnerReport, E> {
-        for p in self.config.paths() {
-            self.submit(&p)?
+    pub fn run(&mut self, paths: &Vec<PathBuf>) -> Result<RunnerReport, E> {
+        for p in paths {
+            self.submit(p)?
         }
 
         self.process_submissions()
     }
-
-
 }
 
 /*
@@ -170,15 +176,15 @@ impl Default for LatexRunner {
 
 impl LatexRunner {
 
-    
+
     fn clean_build_dir(&self) -> Result<(), E> {
         let dir = match &self.output_dir {
             Some(p) => p.to_owned(),
             None    => PathBuf::from(".")
         };
         let ext = get_extension_for_engine(&self.engine);
-        
-        
+
+
         Ok(())
     }
 
@@ -188,7 +194,7 @@ impl LatexRunner {
         } else {
             Ok(())
         }
-    } 
+    }
 
     fn build_report(&self) -> Result<RunnerReport, E> {
         use JobStatus::*;
@@ -206,30 +212,35 @@ impl LatexRunner {
     }
 }
 
-*/ 
+*/
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn make_config() -> Config {
-        Config::default()
+    fn make_config() -> Rc<Config> {
+        Rc::new(Config::default())
+    }
+
+    fn make_reporter() -> Box<NoReporter> {
+        Box::new(NoReporter {})
     }
 
     #[test]
     fn test_build_with_pdflatex() {
         let config = make_config();
         let path = PathBuf::from("test.tex");
-        let mut runner = Runner::new(&config);
-        runner.submit(&path).expect(
-            "An error occured whilst submitting task"
-        );
+        let reporter = make_reporter();
+        let mut runner = Runner::new(config, reporter);
+        runner
+            .submit(&path)
+            .expect("An error occured whilst submitting task");
 
         assert_eq!(runner.active.len(), 1);
 
-        runner.process_submissions().expect(
-            "An error occured whilst processing task"
-        );
+        runner
+            .process_submissions()
+            .expect("An error occured whilst processing task");
 
         assert_eq!(runner.active.len(), 0);
         assert_eq!(runner.completed.len(), 1);
@@ -239,11 +250,6 @@ mod tests {
         assert_eq!(report.errors, 0);
         assert_eq!(report.warnings, 0);
         assert_eq!(report.badboxes, 0);
-
     }
-
-
-
-
 
 }

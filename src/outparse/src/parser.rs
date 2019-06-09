@@ -28,6 +28,10 @@ lazy_static! {
     static ref BADBOX: Regex = Regex::new(
         r#"^(Over|Under)full \\([hv])box \((?:badness (\d+)|(\d+(?:\.\d+)?pt) too \w+)\) (?:(?:(?:in paragraph|in alignment|detected) (?:at lines (\d+)--(\d+)|at line (\d+)))|(?:has occurred while [\\]output is active [\[][\]]))"#
     ).unwrap();
+
+    static ref MISSING_REFERENCE: Regex = Regex::new(
+        r#"^(Citation|Reference) `([^']+)' on page \d+ undefined on input line \d+."#
+    ).unwrap();
 }
 
 struct LogParser<'a, B: 'a + BufRead> {
@@ -164,8 +168,37 @@ impl<'a, B: 'a + BufRead> LogParser<'a, B> {
         self.report.messages.push(Message::Badbox(info));
     }
 
+
+    fn process_missing_reference(&mut self, label: &str) {
+        self.report.missing_references += 1;
+        self.report.messages.push(
+            Message::MissingReference {label: label.to_owned()}
+        )
+    }
+
+    fn process_missing_citation(&mut self, label: &str) {
+        self.report.missing_citations += 1;
+        self.report.messages.push(
+            Message::MissingCitation {label: label.to_owned()}
+        )
+    }
+
     fn process_warning(&mut self, m: Captures) {
         let info = self.process_generic(m);
+        if let Some(message) = info.details.get("message") {
+            if let Some(m) = MISSING_REFERENCE.captures(message) {
+                // 0 - whole match
+                // 1 - type
+                // 2 - label
+                let type_ = m.get(1).unwrap().as_str();
+                if type_ == "Citation" {
+                    self.process_missing_citation(m.get(2).unwrap().as_str());
+                } else if type_ == "Reference" {
+                    self.process_missing_reference(m.get(2).unwrap().as_str());
+                }
+                return
+            }
+        }
         self.report.warnings += 1;
         self.report.messages.push(Message::Warning(info));
     }
@@ -362,6 +395,7 @@ mod tests {
         assert_eq!(report.errors, 1);
     }
 
+    /*
     #[test]
     fn test_latex_undefined_reference_warning() {
         let line =
@@ -370,6 +404,7 @@ mod tests {
 
         assert_eq!(report.warnings, 1);
     }
+    */
 
     #[test]
     fn test_latex_font_warning() {
@@ -393,6 +428,36 @@ mod tests {
         let report = create_parser(&line);
 
         assert_eq!(report.warnings, 1);
+    }
+
+    #[test]
+    fn test_missing_reference_warning() {
+        let line = "LaTeX Warning: Reference `not present' on page 1 undefined on input line 7.";
+        let report = create_parser(&line);
+
+        assert_eq!(report.missing_references, 1);
+
+        if let Message::Warning(warning_message) = report.messages.get(0).unwrap() {
+            let message = warning_message.details.get("message").unwrap();
+
+            assert_eq!(message, "Reference `not present' on page 1 undefined on input line 7.")
+        }
+        
+    }
+
+    #[test]
+    fn test_missing_citation_warning() {
+        let line = "LaTeX Warning: Citation `not present' on page 1 undefined on input line 7.";
+        let report = create_parser(&line);
+
+        assert_eq!(report.missing_citations, 1);
+
+        if let Message::Warning(warning_message) = report.messages.get(0).unwrap() {
+            let message = warning_message.details.get("message").unwrap();
+
+            assert_eq!(message, "Citation `not present' on page 1 undefined on input line 7.")
+        }
+        
     }
 
 }

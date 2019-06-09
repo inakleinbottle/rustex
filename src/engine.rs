@@ -1,9 +1,6 @@
-
-
 use std::ffi::OsString;
 
-
-use failure::{Error, err_msg};
+use failure::{err_msg, Error};
 
 pub enum LaTeXEngine {
     Pdflatex,
@@ -11,13 +8,11 @@ pub enum LaTeXEngine {
     Pdftex,
 }
 
-
-
 pub fn get_extension_for_engine(engine: &str) -> Result<OsString, Error> {
     match engine {
         "pdflatex" => Ok(OsString::from(".pdf")),
-        "pdftex"   => Ok(OsString::from(".pdf")),
-        "luatex"   => Ok(OsString::from(".pdf")),
-        _          => Err(err_msg(format!("Unrecognised LaTeX engine: {}", engine)))
+        "pdftex" => Ok(OsString::from(".pdf")),
+        "luatex" => Ok(OsString::from(".pdf")),
+        _ => Err(err_msg(format!("Unrecognised LaTeX engine: {}", engine))),
     }
 }
