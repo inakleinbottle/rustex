@@ -47,7 +47,7 @@ impl Default for Config {
     fn default() -> Config {
         Config {
             engine: OsString::from("pdflatex"),
-            flags: vec![OsString::from("-interaction=nonstopmode")],
+            flags: vec![],
             build_directory: None,
             clean_build: false,
             verbose: false,
@@ -61,6 +61,7 @@ impl Config {
         for f in &self.flags {
             cmd.arg(f);
         }
+        cmd.arg(OsString::from("-interaction=nonstopmode"));
         if let Some(ref p) = self.build_directory {
             let mut flag = OsString::from("-output-directory=");
             flag.push(p.as_os_str());
