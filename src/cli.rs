@@ -1,8 +1,8 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::rc::Rc;
 use std::slice::Iter;
+use std::sync::Arc;
 
 use failure::{err_msg, Error as E};
 use indicatif::ProgressBar;
@@ -17,7 +17,7 @@ use crate::runner::{ReportIF, Runner};
 
 struct CLIReporter {
     pb: ProgressBar,
-    config: Rc<Config>,
+    config: Arc<Config>,
 }
 
 impl CLIReporter {
@@ -55,10 +55,19 @@ impl ReportIF for CLIReporter {
             }
         }
     }
+
+    fn send_message(&self, message: &str) {
+        self.pb.println(message);
+    }
+
+    fn abort(&self) {
+        self.pb.println("Aborting");
+        self.pb.finish_and_clear();
+    }
 }
 
 impl CLIReporter {
-    fn new(config: Rc<Config>, num_files: usize) -> CLIReporter {
+    fn new(config: Arc<Config>, num_files: usize) -> CLIReporter {
         CLIReporter {
             pb: ProgressBar::new(num_files as u64),
             config,
@@ -119,11 +128,11 @@ impl Default for CliOptions {
 
 pub fn run() -> Result<(), E> {
     let CliOptions { config, files } = CliOptions::from_args();
-    let conf = Rc::new(config);
+    let conf = Arc::new(config);
 
     // do the setup for verbosity etc.
     let inner = CLIReporter::new(conf.clone(), files.len());
-    let reporter = Box::new(inner);
+    let reporter = Arc::new(inner);
     let mut runner = Runner::new(conf.clone(), reporter);
 
     let _report = runner.run(&files)?;

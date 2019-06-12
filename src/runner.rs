@@ -1,12 +1,13 @@
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::process::{Child as ChildProcess, Command, Stdio};
-use std::rc::Rc;
+use std::process::exit;
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
 use failure::{err_msg, Error as E};
 use indicatif::ProgressBar;
 use structopt::StructOpt;
+
 
 use outparse::{parse_log, BuildReport};
 
@@ -18,13 +19,18 @@ use crate::report::RunnerReport;
 pub trait ReportIF {
     fn finish(&self, report: &RunnerReport);
     fn report_completed(&self, job: &Job);
+    fn send_message(&self, message: &str);
+    fn abort(&self);
 }
+
 
 pub struct NoReporter;
 
 impl ReportIF for NoReporter {
     fn finish(&self, report: &RunnerReport) {}
     fn report_completed(&self, job: &Job) {}
+    fn send_message(&self, message: &str) {}
+    fn abort(&self) {}
 }
 
 #[derive(Debug)]
@@ -34,18 +40,24 @@ pub enum ReportFormat {
 }
 
 pub struct Runner {
-    config: Rc<Config>,
-    reporter: Box<dyn ReportIF>,
+    config: Arc<Config>,
+    reporter: Arc<dyn ReportIF + Send + Sync>,
+
+    abort: Arc<AtomicBool>,
 
     active: VecDeque<Job>,
     completed: Vec<Job>,
 }
 
 impl Runner {
-    pub fn new(config: Rc<Config>, reporter: Box<dyn ReportIF>) -> Runner {
+    pub fn new(
+        config: Arc<Config>, 
+        reporter: Arc<dyn ReportIF + Send + Sync>
+    )-> Runner {
         Runner {
             config,
             reporter,
+            abort: Arc::new(AtomicBool::new(false)),
             active: VecDeque::new(),
             completed: Vec::new(),
         }
@@ -59,6 +71,10 @@ impl Runner {
 
     fn process_submissions(&mut self) -> Result<RunnerReport, E> {
         while let Some(mut job) = self.active.pop_front() {
+            if self.abort.load(Ordering::Relaxed) {
+                job.kill();
+                self.kill();
+            }
             if job.poll() {
                 self.reporter.report_completed(&job);
                 self.completed.push(job);
@@ -71,6 +87,12 @@ impl Runner {
         let report = self.build_report()?;
         self.reporter.finish(&report);
         Ok(report)
+    }
+
+    fn kill(&mut self) {
+        self.active.iter_mut().for_each(|j| j.kill());
+        self.reporter.abort();
+        exit(1);
     }
 
     fn do_cleanup(&mut self) -> Result<(), E> {
@@ -99,6 +121,13 @@ impl Runner {
     }
 
     pub fn run(&mut self, paths: &Vec<PathBuf>) -> Result<RunnerReport, E> {
+        let reporter = self.reporter.clone();
+        let abort_var = self.abort.clone();
+        ctrlc::set_handler(move || {
+            reporter.send_message("Keyboard interupt received");
+            abort_var.store(true, Ordering::Relaxed);
+        })?;
+
         for p in paths {
             self.submit(p)?
         }
@@ -217,12 +246,12 @@ impl LatexRunner {
 mod tests {
     use super::*;
 
-    fn make_config() -> Rc<Config> {
-        Rc::new(Config::default())
+    fn make_config() -> Arc<Config> {
+        Arc::new(Config::default())
     }
 
-    fn make_reporter() -> Box<NoReporter> {
-        Box::new(NoReporter {})
+    fn make_reporter() -> Arc<NoReporter> {
+        Arc::new(NoReporter {})
     }
 
     #[test]

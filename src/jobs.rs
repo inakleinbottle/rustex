@@ -3,7 +3,7 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child as ChildProcess, ChildStdout, Command};
-use std::rc::Rc;
+use std::sync::Arc;
 
 use failure::{err_msg, Error};
 
@@ -33,7 +33,7 @@ impl fmt::Display for JobStatus {
 
 #[derive(Debug)]
 pub struct Job {
-    config: Rc<Config>,
+    config: Arc<Config>,
     pub jobname: OsString,
     command: Command,
     child: Option<ChildProcess>,
@@ -53,7 +53,7 @@ impl fmt::Display for Job {
 }
 
 impl Job {
-    pub fn new(config: Rc<Config>, path: &Path) -> Result<Job, Error> {
+    pub fn new(config: Arc<Config>, path: &Path) -> Result<Job, Error> {
         let mut command = config.get_command();
         command.arg(&path);
         let mut job = Job {
@@ -113,6 +113,12 @@ impl Job {
         self.child = Some(self.command.spawn()?);
         self.run_count += 1;
         Ok(())
+    }
+
+    pub fn kill(&mut self) {
+        if let Some(ref mut child) = self.child {
+            let _ = child.kill();
+        }
     }
 
     pub fn get_report(&mut self) -> Result<&BuildReport, Error> {
