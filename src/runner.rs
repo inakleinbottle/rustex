@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
-use failure::{err_msg, Error as E};
+use failure::{err_msg, Error as E, bail};
 use indicatif::ProgressBar;
 use structopt::StructOpt;
 
@@ -64,6 +64,9 @@ impl Runner {
     }
 
     fn submit(&mut self, path: &Path) -> Result<(), E> {
+        if !path.exists() {
+            bail!("The file {} does not exist", path.display())
+        }
         let job = Job::new(self.config.clone(), path)?;
         self.active.push_back(job);
         Ok(())
@@ -129,7 +132,7 @@ impl Runner {
         })?;
 
         for p in paths {
-            self.submit(p)?
+            self.submit(p)?;
         }
 
         self.process_submissions()
