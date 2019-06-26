@@ -26,7 +26,7 @@ lazy_static! {
     ).unwrap();
 
     static ref BADBOX: Regex = Regex::new(
-        r#"^(Over|Under)full \\([hv])box \((?:badness (\d+)|(\d+(?:\.\d+)?pt) too \w+)\) (?:(?:(?:in paragraph|in alignment|detected) (?:at lines (\d+)--(\d+)|at line (\d+)))|(?:has occurred while [\\]output is active [\[][\]]))"#
+        r#"^(Over|Under)full \\([hv])box \((?:badness (\d+)|(\d+(?:\.\d+)?pt) too \w+)\) (?:(?:(?:in paragraph|in alignment|detected) (?:at lines (\d+)--(\d+)|at line (\d+)))|(?:has occurred while [\\]output is active [\[](\d+)?[\]]))"#
     ).unwrap();
 
     static ref MISSING_REFERENCE: Regex = Regex::new(
@@ -62,16 +62,16 @@ impl<'a, B: 'a + BufRead> LogParser<'a, B> {
     fn parse_line(&mut self, line: &str) {
         if let Some(m) = INFO.captures(&line) {
             self.process_info(m);
-            self.after_match();
+            //self.after_match();
         } else if let Some(m) = BADBOX.captures(&line) {
             self.process_badbox(m);
-            self.after_match();
+            //self.after_match();
         } else if let Some(m) = WARNING.captures(&line) {
             self.process_warning(m);
-            self.after_match();
+            //self.after_match();
         } else if let Some(m) = ERROR.captures(&line) {
             self.process_error(m);
-            self.after_match();
+            //self.after_match();
         }
     }
 
@@ -135,6 +135,7 @@ impl<'a, B: 'a + BufRead> LogParser<'a, B> {
         // 5 - Multi-line start line (at lines (\d+)--)?
         // 6 - Multi-line end line (--(\d+))?
         // 7 - Single line (at line (\d+))?
+        // 8 - page ([(\d+)?)?
 
         let box_type = m.get(1).unwrap().as_str();
         let direction = m.get(2).unwrap().as_str();
@@ -162,6 +163,11 @@ impl<'a, B: 'a + BufRead> LogParser<'a, B> {
                 String::from("end_line"),
                 m.get(6).unwrap().as_str().to_owned(),
             );
+        }
+        
+        if let Some(page) = m.get(8) {
+            info.details
+                .insert(String::from("page"), page.as_str().to_owned());
         }
 
         self.report.badboxes += 1;
@@ -248,11 +254,11 @@ impl<'a, B: 'a + BufRead> LogParser<'a, B> {
                     }
                 }
 
-                if self.collect_remaining > 0 {
-                    last.add_context(line);
-                    self.collect_remaining -= 1;
-                    continue;
-                }
+                //if self.collect_remaining > 0 {
+                //    last.add_context(line);
+                //    self.collect_remaining -= 1;
+                //    continue;
+                //}
             }
 
             self.parse_line(&line);
@@ -458,6 +464,14 @@ mod tests {
             assert_eq!(message, "Citation `not present' on page 1 undefined on input line 7.")
         }
         
+    }
+    
+    #[test]
+    fn test_underfull_vbox_has_occurred_with_page() {
+        let line = "Underfull \\vbox (badness 10000) has occurred while \\output is active [38]";
+        
+        let report = create_parser(&line);
+        assert_eq!(report.badboxes, 1);
     }
 
 }
