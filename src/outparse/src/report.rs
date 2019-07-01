@@ -2,7 +2,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct MessageInfo {
     pub full: String,
     pub details: HashMap<String, String>,
@@ -36,7 +36,7 @@ impl MessageInfo {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub enum Message {
     Error(MessageInfo),
     Warning(MessageInfo),
@@ -101,7 +101,7 @@ impl Message {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct BuildReport {
     pub errors: usize,
     pub warnings: usize,

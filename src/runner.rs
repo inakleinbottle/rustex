@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::process::exit;
+use std::iter::Iterator;
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
 use failure::{err_msg, Error as E, bail};
@@ -39,27 +40,37 @@ pub enum ReportFormat {
     Json,
 }
 
+
 pub struct Runner {
     config: Arc<Config>,
     reporter: Arc<dyn ReportIF + Send + Sync>,
 
     abort: Arc<AtomicBool>,
 
+    pending: Vec<Job>,
     active: VecDeque<Job>,
     completed: Vec<Job>,
+    failed: Vec<Job>
+
 }
 
 impl Runner {
-    pub fn new(
+    pub fn new<P: AsRef<Path>>(
         config: Arc<Config>, 
-        reporter: Arc<dyn ReportIF + Send + Sync>
+        reporter: Arc<dyn ReportIF + Send + Sync>,
+        jobs: &[P]
     )-> Runner {
+        let pending: Vec<Job> = jobs.iter().map(|p| {
+            Job::new(config.clone(), p.as_ref())
+        }).collect();
         Runner {
             config,
             reporter,
             abort: Arc::new(AtomicBool::new(false)),
+            pending,
             active: VecDeque::new(),
             completed: Vec::new(),
+            failed: Vec::new()
         }
     }
 
@@ -67,9 +78,34 @@ impl Runner {
         if !path.exists() {
             bail!("The file {} does not exist", path.display())
         }
-        let job = Job::new(self.config.clone(), path)?;
-        self.active.push_back(job);
+        let job = Job::new(self.config.clone(), path);
+        self.pending.push(job);
         Ok(())
+    }
+
+    fn launch_pending_jobs(&mut self) {
+        while let Some(mut job) = self.pending.pop() {
+            job.spawn().expect("Could not spawn task");
+            self.active.push_back(job);
+        }
+    }
+
+    fn process_till_next_complete(&mut self) -> Option<BuildReport> {
+        if !self.pending.is_empty() {
+                self.launch_pending_jobs();
+        }
+        
+        while let Some(mut job) = self.active.pop_front() {
+            
+            if job.poll() {
+                self.completed.push(job);
+                let j = self.completed.last().unwrap();
+                return Some(j.report.as_ref().unwrap().clone())
+            } else {
+                self.active.push_back(job);
+            }
+        }
+        None
     }
 
     fn process_submissions(&mut self) -> Result<RunnerReport, E> {
@@ -78,12 +114,7 @@ impl Runner {
                 job.kill();
                 self.kill();
             }
-            if job.poll() {
-                self.reporter.report_completed(&job);
-                self.completed.push(job);
-            } else {
-                self.active.push_back(job);
-            }
+            
         }
         self.do_cleanup()?;
 
@@ -139,111 +170,13 @@ impl Runner {
     }
 }
 
-/*
+impl Iterator for Runner {
+    type Item = BuildReport;
 
-#[derive(Debug)]
-struct LatexRunner {
-    engine: String,
-    flags: Vec<String>,
-    output_dir: Option<PathBuf>,
-
-    max_rebuilds: u8,
-    force_two_runs: bool,
-
-    clean_build: bool,
-    report_fmt: ReportFormat,
-
-    active_jobs: VecDeque<Job>,
-    completed_jobs: Vec<Job>,
-}
-
-impl From<&LatexRunnerConfig> for LatexRunner {
-
-    fn from(config: &LatexRunnerConfig) -> LatexRunner {
-        let outdir = match &config.build_directory {
-            Some(ostr) => Some(PathBuf::from(ostr)),
-            None => None,
-        };
-
-        LatexRunner{
-            engine: config.engine.clone(),
-            flags: config.flags.clone(),
-            output_dir: outdir,
-
-            max_rebuilds: config.max_rebuilds,
-            force_two_runs: config.force_two_builds,
-
-            clean_build: config.clean_build,
-
-            report_fmt: ReportFormat::Human,
-
-            active_jobs: VecDeque::new(),
-            completed_jobs: Vec::new(),
-        }
-    }
-
-}
-
-
-impl Default for LatexRunner {
-
-    fn default() -> Self {
-        LatexRunner {
-            engine: String::from("pdflatex"),
-            flags: vec![String::from("-interaction=nonstopmode")],
-            output_dir: None,
-            max_rebuilds: 1,
-            force_two_runs: false,
-            clean_build: false,
-            report_fmt: ReportFormat::Human,
-            active_jobs: VecDeque::new(),
-            completed_jobs: Vec::new(),
-        }
-    }
-
-}
-
-
-
-impl LatexRunner {
-
-
-    fn clean_build_dir(&self) -> Result<(), E> {
-        let dir = match &self.output_dir {
-            Some(p) => p.to_owned(),
-            None    => PathBuf::from(".")
-        };
-        let ext = get_extension_for_engine(&self.engine);
-
-
-        Ok(())
-    }
-
-    fn do_cleanup(&mut self) -> Result<(), E> {
-        if self.clean_build {
-            self.clean_build_dir()
-        } else {
-            Ok(())
-        }
-    }
-
-    fn build_report(&self) -> Result<RunnerReport, E> {
-        use JobStatus::*;
-        let mut report = RunnerReport::new();
-        report.num_files = self.completed_jobs.len();
-        for job in &self.completed_jobs {
-            let jobname = job.jobname.clone();
-            match &job.status {
-                Success => report.success += 1,
-                Failure => report.fail += 1,
-                _ => return Err(err_msg("Job was not completed."))
-            }
-        }
-        Ok(report)
+    fn next(&mut self) -> Option<Self::Item> {
+        self.process_till_next_complete()
     }
 }
-
-*/
 
 #[cfg(test)]
 mod tests {
@@ -262,17 +195,16 @@ mod tests {
         let config = make_config();
         let path = PathBuf::from("test.tex");
         let reporter = make_reporter();
-        let mut runner = Runner::new(config, reporter);
-        runner
-            .submit(&path)
-            .expect("An error occured whilst submitting task");
+        let mut runner = Runner::new(config, reporter, &[&path]);
 
+        assert_eq!(runner.pending.len(), 1);
+
+        runner.launch_pending_jobs();
+        assert_eq!(runner.pending.len(), 0);
         assert_eq!(runner.active.len(), 1);
 
-        runner
-            .process_submissions()
-            .expect("An error occured whilst processing task");
-
+        let report = runner.process_till_next_complete();
+        
         assert_eq!(runner.active.len(), 0);
         assert_eq!(runner.completed.len(), 1);
 

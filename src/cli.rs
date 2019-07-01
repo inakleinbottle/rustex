@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::slice::Iter;
 use std::sync::Arc;
+use std::fmt::Display;
 
 use failure::{err_msg, Error as E};
 use indicatif::ProgressBar;
@@ -133,8 +134,13 @@ pub fn run() -> Result<(), E> {
     // do the setup for verbosity etc.
     let inner = CLIReporter::new(conf.clone(), files.len());
     let reporter = Arc::new(inner);
-    let mut runner = Runner::new(conf.clone(), reporter);
-
-    let _report = runner.run(&files)?;
+    let runner = Runner::new(conf.clone(), 
+                             reporter, 
+                             &files);
+    let pb = ProgressBar::new(files.len() as u64);
+    for completed in pb.wrap_iter(runner.into_iter()) {
+        pb.println(completed.to_string());
+    }
+    
     Ok(())
 }

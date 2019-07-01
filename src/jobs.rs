@@ -53,10 +53,10 @@ impl fmt::Display for Job {
 }
 
 impl Job {
-    pub fn new(config: Arc<Config>, path: &Path) -> Result<Job, Error> {
+    pub fn new(config: Arc<Config>, path: &Path) -> Job {
         let mut command = config.get_command();
         command.arg(&path);
-        let mut job = Job {
+        Job {
             config,
             jobname: path.file_stem().unwrap().to_owned(),
             command,
@@ -64,9 +64,7 @@ impl Job {
             run_count: 0,
             report: None,
             status: JobStatus::Pending,
-        };
-        job.spawn()?;
-        Ok(job)
+        }
     }
 
     fn stdout(&mut self) -> Option<ChildStdout> {
