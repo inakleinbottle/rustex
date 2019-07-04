@@ -14,67 +14,8 @@ use outparse::{BuildReport, Message};
 use crate::config::Config;
 use crate::jobs::Job;
 use crate::report::RunnerReport;
-use crate::runner::{ReportIF, Runner};
+use crate::runner::{Runner};
 
-struct CLIReporter {
-    pb: ProgressBar,
-    config: Arc<Config>,
-}
-
-impl CLIReporter {
-    fn print_message(&self, message: &Message) {
-        if let Some(inner) = message.as_ref() {
-            self.pb.println(inner.full.as_str());
-        } else {
-            match message {
-                Message::MissingReference { label } => {
-                    self.pb.println(format!("Missing label: {}", label));
-                }
-                Message::MissingCitation { label } => {
-                    self.pb.println(format!("Missing citation: {}", label));
-                }
-                _ => {}
-            };
-        }
-    }
-}
-
-impl ReportIF for CLIReporter {
-    fn finish(&self, report: &RunnerReport) {
-        let message = format!("{}", report);
-        self.pb.finish_with_message(&message);
-    }
-
-    fn report_completed(&self, job: &Job) {
-        self.pb.inc(1);
-        self.pb.println(format!("{}", job));
-        if self.config.verbose {
-            if let Some(ref report) = job.report {
-                for message in &report.messages {
-                    self.print_message(&message)
-                }
-            }
-        }
-    }
-
-    fn send_message(&self, message: &str) {
-        self.pb.println(message);
-    }
-
-    fn abort(&self) {
-        self.pb.println("Aborting");
-        self.pb.finish_and_clear();
-    }
-}
-
-impl CLIReporter {
-    fn new(config: Arc<Config>, num_files: usize) -> CLIReporter {
-        CLIReporter {
-            pb: ProgressBar::new(num_files as u64),
-            config,
-        }
-    }
-}
 
 /// LaTeX file build utility.
 ///
@@ -132,15 +73,19 @@ pub fn run() -> Result<(), E> {
     let conf = Arc::new(config);
 
     // do the setup for verbosity etc.
-    let inner = CLIReporter::new(conf.clone(), files.len());
-    let reporter = Arc::new(inner);
-    let runner = Runner::new(conf.clone(), 
-                             reporter, 
-                             &files);
+    let mut runner = Runner::new(conf.clone(),  
+                                 &files);
     let pb = ProgressBar::new(files.len() as u64);
-    for completed in pb.wrap_iter(runner.into_iter()) {
+    
+    while let Some(completed) = runner.process_till_next_complete() {
+        pb.tick();
         pb.println(completed.to_string());
     }
+    runner.do_cleanup()?;
+
+    let report = runner.build_report()?;
+    pb.println(report.to_string());
+    pb.finish_and_clear();
     
     Ok(())
 }

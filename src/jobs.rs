@@ -14,6 +14,7 @@ use crate::config::Config;
 #[derive(Debug)]
 pub enum JobStatus {
     Pending,
+    Active,
     Success,
     Failed,
     NeedsRebuild,
@@ -23,6 +24,7 @@ impl fmt::Display for JobStatus {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use JobStatus::*;
         match self {
+            Active => write!(f, "Active"),
             Pending => write!(f, "pending"),
             Success => write!(f, "succeeded"),
             Failed => write!(f, "failed"),
@@ -93,6 +95,14 @@ impl Job {
     }
 
     pub fn poll(&mut self) -> bool {
+        match self.status {
+            JobStatus::Pending => self.poll_pending(),
+            JobStatus::Active => self.poll_active(),
+            _ => false
+        }
+    }
+
+    fn poll_active(&mut self) -> bool {
         let child = match self.child {
             Some(ref mut c) => c,
             None => return false,
@@ -100,15 +110,23 @@ impl Job {
         match child.try_wait() {
             Ok(Some(r)) => self.check_build_log(r.success()),
             Ok(None) => false,
-            Err(e) => {
+            Err(_) => {
                 self.status = JobStatus::Failed;
-                true
+                false
             }
         }
     }
 
+    fn poll_pending(&mut self) -> bool {
+        if let Err(e) = self.spawn() {
+            self.status = JobStatus::Failed;
+        }
+        false
+    }
+
     pub fn spawn(&mut self) -> Result<(), Error> {
         self.child = Some(self.command.spawn()?);
+        self.status = JobStatus::Active;
         self.run_count += 1;
         Ok(())
     }
@@ -119,7 +137,7 @@ impl Job {
         }
     }
 
-    pub fn get_report(&mut self) -> Result<&BuildReport, Error> {
+    pub fn get_report(&self) -> Result<&BuildReport, Error> {
         if let Some(report) = self.report.as_ref() {
             Ok(report)
         } else {

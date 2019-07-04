@@ -1,7 +1,5 @@
-use std::ffi::{OsStr, OsString};
-use std::path::PathBuf;
+use std::ffi::OsString;
 use std::process::{Command, Stdio};
-use std::slice::Iter;
 
 use structopt::StructOpt;
 
@@ -10,8 +8,8 @@ pub struct Config {
     /// Use verbose mode.
     ///
     /// More output will be generated during the build
-    #[structopt(short = "v", long = "verbose")]
-    pub verbose: bool,
+    //#[structopt(short = "v", long = "verbose")]
+    //pub verbose: bool,
 
     /// LaTeX executable to use. (The build engine.)
     ///
@@ -41,6 +39,9 @@ pub struct Config {
     /// only be executed if there are unresolved warnings.
     #[structopt(long = "clean")]
     pub clean_build: bool,
+
+    #[structopt(short = "j", long = "jobs", default_value="1")]
+    pub max_jobs: usize
 }
 
 impl Default for Config {
@@ -50,7 +51,8 @@ impl Default for Config {
             flags: vec![],
             build_directory: None,
             clean_build: false,
-            verbose: false,
+            //verbose: false,
+            max_jobs: 1
         }
     }
 }
